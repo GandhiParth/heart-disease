@@ -1,0 +1,168 @@
+---
+title: "Heart-Attack"
+author: "Parth Gandhi"
+date: "1/5/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+Loading the required libraries.
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(caret)
+library(ggcorrplot)
+library(rpart)
+library(caret)
+```
+Importing the data 
+```{r}
+heart = read.csv("heart.csv")
+```
+
+We look at the structure of the data and check if there are missing values in any of the colomns.
+```{r}
+str(heart)
+summary(heart)
+f = function(x){
+  y = any(x == "")
+}
+check.na = apply(heart,2,f)
+check.na
+```
+We see that none of the variables have missing values.
+
+We will start with some exploratory data analysis to get insights about the casues of heart attacks and then procced to model building.
+```{r}
+ggplot(heart) +
+  aes(x = Age) +
+  geom_histogram(bins = 30L, color = "yellow", fill = "red") +
+  labs(x = "Age", y = "Count", title = "Age Distribtuion") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 15L,
+    face = "bold",
+    hjust = 0.5)
+  ) + geom_vline(aes(xintercept = median(Age)), color = "black", linetype = "dashed", size = 1)
+
+```
+The median age for heart disease is 54 years while for majority of the poeple heart disease occurs between age 50 and 65.
+
+We look at the distribtuion of sex among people having heart disease.
+
+```{r}
+ggplot(heart) +
+  aes(x = Sex, fill = Sex) +
+  geom_bar() +
+  scale_fill_brewer(palette = "Dark2", direction = 1) +
+  labs(x = "Sex", y = "Count", title = "Sex Distribution") +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5))
+```
+There proportion of males in the data set is significantly higher as compared to male. It can be that female are less prone to heart disease as comapred to male or that we have do not have a porper reperesntation of the population and have sampled more men who have heart disease as compared to women.
+```{r}
+ggplot(heart) +
+  aes(x = ChestPainType, fill = ChestPainType) +
+  geom_bar() +
+  scale_fill_hue(direction = -1) +
+  theme_minimal() +
+  facet_wrap(vars(Sex))
+```
+Around 400 observation are asymptomatic, meaning that half of our participants didn't have any previous symptoms before suffering the heart attack.
+
+As we can see, women are significantly less asymptomatic than men. Most heart failures came without prior notice.
+
+```{r}
+df2 <- heart[c(1, 4, 5, 6, 8, 10, 12)]
+
+corr <- cor(round(df2, 2))
+
+corr_chart <- ggcorrplot(corr, hc.order = TRUE,
+                         lab = FALSE)
+print(corr_chart)
+```
+We see that the risk of heart disease is postively correlated with Old Peak, Age,Resting BP and Fasting BS while MaxHR and Cholesterol show negaitve correlation.
+
+We now move towards model building for predicting the chance of onset of Heart Disease.
+
+We start with enocidng the variabels
+```{r}
+ohe_df<- heart %>% mutate(value = 1)  %>% spread(ChestPainType, value,  fill = 0 )
+ohe_df<-ohe_df %>% mutate(value = 1)  %>% spread(RestingECG, value,  fill = 0 )
+ohe_df<-ohe_df %>% mutate(value = 1)  %>% spread(ST_Slope, value,  fill = 0 )
+ohe_df$Sex<-as.factor(ohe_df$Sex)
+ohe_df$ExerciseAngina<-as.factor(ohe_df$ExerciseAngina)
+head(ohe_df)
+```
+We now normalize the coeffecients.
+```{r}
+normalize <- function(x) {
+    return((x - min(x)) / (max(x) - min(x)))
+}
+ohe_df2<-ohe_df
+ohe_df<-apply(ohe_df[,-c(2,7,9)],2,normalize)
+ohe_df<-as.data.frame(ohe_df)
+ohe_df$Sex<-ohe_df2$Sex
+ohe_df$ExerciseAngina<-ohe_df2$ExerciseAngina
+ohe_df$HeartDisease<-ohe_df2$HeartDisease
+
+head(ohe_df)
+```
+We build a decission tree and set the folds as 10
+```{r}
+library(rpart)
+k <- 10
+folds <- sample(k, size = nrow(ohe_df), replace = TRUE)
+```
+We split the data into test and train data and train the decission tree.
+```{r}
+predictions <- NULL
+groundTruth <- NULL
+for(i in 1:k){
+    train_df <- ohe_df[which(folds != i), ]
+    test_df <- ohe_df[which(folds == i), ]
+    treeClassifier <- rpart(HeartDisease ~ .,train_df, xval=0)
+    foldPredictions <- predict(treeClassifier,test_df, type = "vector")
+    predictions <- c(predictions,as.character(foldPredictions))
+    groundTruth <- c(groundTruth,as.character(test_df$HeartDisease))
+}
+```
+
+```{r}
+library(rpart.plot)
+rpart.plot(treeClassifier, digits=2,cex=1.2,varlen=0,fallen.leaves = F, legend.y = 3, box.palette=c("red", "white"))
+```
+The prior porbabilites are as follows
+```{r}
+table(train_df$HeartDisease) / nrow(train_df)
+```
+
+We now build a KNN clasification model.
+```{r}
+library(caTools)
+set.seed(123)
+sample<-sample.split(ohe_df,SplitRatio = 0.75)
+train<-subset(ohe_df,sample==T)
+test<-subset(ohe_df,sample==F)
+train$Sex<-ifelse(train$Sex=="M",1,0)
+test$Sex<-ifelse(test$Sex=="M",1,0)
+train$ExerciseAngina<-ifelse(train$ExerciseAngina=="N",0,1)
+test$ExerciseAngina<-ifelse(test$ExerciseAngina=="N",0,1)
+head(train)
+
+fit_control<-trainControl(method = "repeatedcv",number = 50,
+                                   repeats=50)
+set.seed(123)
+model<-caret::train(HeartDisease~.,data=train,method="knn",trControl=fit_control,tuneGrid=expand.grid(k=1:45))
+
+model
+plot(model)
+library(class)
+set.seed(4)
+
+modelknn<-knn(train=train[,1:18],test = test[,1:18],cl=train$HeartDisease,k=25)
+#confusionMatrix(test$HeartDisease,modelknn)
+```
+We see that the KNN model gives us an accuracy of about 86%.
